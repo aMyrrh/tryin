@@ -324,6 +324,11 @@ class AppIndicatorTrayController(TrayController):
         self.indicator.set_menu(self.menu)
 
     def _quit_impl(self):
+        self.indicator.set_status(AppIndicator.IndicatorStatus.PASSIVE)
+        try:
+            os.unlink(self.icon_path)
+        except Exception:
+            pass
         Gtk.main_quit()
 
 
@@ -341,12 +346,17 @@ def create_icon_path():
 
 def run_tray(service: RediskService):
     if APPINDICATOR_AVAILABLE and sys.platform.startswith("linux"):
+        print("Using AppIndicator for tray")
         # Используем AppIndicator для GNOME/Ubuntu
         controller = AppIndicatorTrayController(service)
         controller.rebuild_menu()
         controller.show_notification("DiscoHack", "Программа запущена")
         Gtk.main()
     else:
+        if sys.platform.startswith("linux"):
+            print("AppIndicator not available. Install: sudo apt install python3-gi gir1.2-appindicator3-0.1")
+            print("Also install GNOME extension: AppIndicator and KStatusNotifierItem Support")
+        print("Using QSystemTrayIcon for tray (may not work in GNOME)")
         # Fallback to QSystemTrayIcon
         app = QApplication(sys.argv)
         icon_path = create_icon_path()
