@@ -137,24 +137,17 @@ class TrayController:
     def add_disconnect_menu(self):
         connected_disks = self.service.get_connected_disks()
         if not connected_disks:
-            return
-
-        if len(connected_disks) == 1:
-            disk_id = connected_disks[0]
-            action = QAction(f"Отключить {DISK_TITLES[disk_id]}")
-            action.triggered.connect(lambda: self.disconnect_disk(disk_id))
+            action = QAction("Нет подключенных дисков")
+            action.setEnabled(False)
             self.menu.addAction(action)
             return
 
-        disconnect_menu = QMenu("Отключить диск")
         for disk_id in connected_disks:
             action = QAction(f"Отключить {DISK_TITLES[disk_id]}")
             action.triggered.connect(lambda _, d=disk_id: self.disconnect_disk(d))
-            disconnect_menu.addAction(action)
-        self.menu.addMenu(disconnect_menu)
+            self.menu.addAction(action)
 
-    def add_add_disk_menu(self):
-        add_menu = QMenu("Добавить диск")
+    def add_connect_menu(self):
         connected_disks = set(self.service.get_connected_disks())
         available = [
             disk_id
@@ -163,21 +156,20 @@ class TrayController:
         ]
 
         if not available:
-            disabled_action = QAction("Все диски уже подключены")
-            disabled_action.setEnabled(False)
-            add_menu.addAction(disabled_action)
-        else:
-            for disk_id in available:
-                action = QAction(DISK_TITLES[disk_id])
-                action.triggered.connect(lambda _, d=disk_id: self.connect_disk(d))
-                add_menu.addAction(action)
+            action = QAction("Все диски уже подключены")
+            action.setEnabled(False)
+            self.menu.addAction(action)
+            return
 
-        self.menu.addMenu(add_menu)
+        for disk_id in available:
+            action = QAction(f"Подключить {DISK_TITLES[disk_id]}")
+            action.triggered.connect(lambda _, d=disk_id: self.connect_disk(d))
+            self.menu.addAction(action)
 
     def rebuild_menu(self):
         self.menu.clear()
         self.add_disconnect_menu()
-        self.add_add_disk_menu()
+        self.add_connect_menu()
 
         open_action = QAction("Открыть Redisk")
         open_action.triggered.connect(self.open_redisk)
