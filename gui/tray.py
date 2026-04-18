@@ -15,6 +15,14 @@ from PyQt6.QtWidgets import (
     QSystemTrayIcon,
 )
 
+try:
+    from gi.repository import AppIndicator3 as AppIndicator
+    from gi.repository import Gtk
+    from gi.repository import GLib
+    APPINDICATOR_AVAILABLE = True
+except ImportError:
+    APPINDICATOR_AVAILABLE = False
+
 from core.redisk_service import DISK_TITLES, RediskService
 
 DISK_AUTH_URLS = {
@@ -24,23 +32,16 @@ DISK_AUTH_URLS = {
 
 
 class TrayController:
-    def __init__(
-        self,
-        app: QApplication,
-        tray_icon: QSystemTrayIcon,
-        service: RediskService,
-    ):
-        self.app = app
-        self.tray_icon = tray_icon
+    def __init__(self, service: RediskService):
         self.service = service
         self.notifications_enabled = True
-        self.menu = QMenu()
-        self.notifications_action = QAction("Отключить уведомления")
-        self.notifications_action.triggered.connect(self.toggle_notifications)
 
     def show_notification(self, title: str, message: str):
         if self.notifications_enabled:
-            self.tray_icon.showMessage(title, message)
+            self._show_notification_impl(title, message)
+
+    def _show_notification_impl(self, title: str, message: str):
+        raise NotImplementedError
 
     def open_redisk(self):
         mount_dir = str(self.service.root_dir)
@@ -128,11 +129,41 @@ class TrayController:
         self.notifications_enabled = not self.notifications_enabled
         if self.notifications_enabled:
             print("Уведомления включены")
-            self.notifications_action.setText("Отключить уведомления")
+            self._set_notifications_text("Отключить уведомления")
             self.show_notification("DiscoHack", "Уведомления включены")
         else:
             print("Уведомления отключены")
-            self.notifications_action.setText("Включить уведомления")
+            self._set_notifications_text("Включить уведомления")
+
+    def _set_notifications_text(self, text: str):
+        raise NotImplementedError
+
+    def rebuild_menu(self):
+        raise NotImplementedError
+
+    def quit_app(self):
+        print("Программа закрыта")
+        self.service.shutdown()
+        self._quit_impl()
+
+    def _quit_impl(self):
+        raise NotImplementedError
+
+
+class QTrayController(TrayController):
+    def __init__(self, app: QApplication, tray_icon: QSystemTrayIcon, service: RediskService):
+        super().__init__(service)
+        self.app = app
+        self.tray_icon = tray_icon
+        self.menu = QMenu()
+        self.notifications_action = QAction("Отключить уведомления")
+        self.notifications_action.triggered.connect(self.toggle_notifications)
+
+    def _show_notification_impl(self, title: str, message: str):
+        self.tray_icon.showMessage(title, message)
+
+    def _set_notifications_text(self, text: str):
+        self.notifications_action.setText(text)
 
     def add_disconnect_menu(self):
         heading = QAction("Отключить диск")
@@ -192,11 +223,108 @@ class TrayController:
         quit_action.triggered.connect(self.quit_app)
         self.menu.addAction(quit_action)
 
-    def quit_app(self):
-        print("Программа закрыта")
-        self.service.shutdown()
+        self.tray_icon.setContextMenu(self.menu)
+
+    def _quit_impl(self):
         self.tray_icon.hide()
         self.app.quit()
+
+
+class AppIndicatorTrayController(TrayController):
+    def __init__(self, service: RediskService):
+        super().__init__(service)
+        self.icon_path = create_icon_path()
+        self.indicator = AppIndicator.Indicator.new(
+            "discohack",
+            self.icon_path,
+            AppIndicator.IndicatorCategory.APPLICATION_STATUS
+        )
+        self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+        self.menu = Gtk.Menu()
+        self.notifications_item = Gtk.MenuItem(label="Отключить уведомления")
+        self.notifications_item.connect("activate", lambda w: self.toggle_notifications())
+
+    def _show_notification_impl(self, title: str, message: str):
+        # Для простоты, используем notify-send если доступен
+        try:
+            subprocess.run(["notify-send", title, message], check=True)
+        except Exception:
+            print(f"Уведомление: {title} - {message}")
+
+    def _set_notifications_text(self, text: str):
+        self.notifications_item.set_label(text)
+
+    def add_disconnect_menu(self):
+        heading = Gtk.MenuItem(label="Отключить диск")
+        heading.set_sensitive(False)
+        self.menu.append(heading)
+
+        connected_disks = self.service.get_connected_disks()
+        if not connected_disks:
+            item = Gtk.MenuItem(label="Нет подключенных дисков")
+            item.set_sensitive(False)
+            self.menu.append(item)
+            return
+
+        for disk_id in connected_disks:
+            item = Gtk.MenuItem(label=f"Отключить {DISK_TITLES[disk_id]}")
+            item.connect("activate", lambda w, d=disk_id: self.disconnect_disk(d))
+            self.menu.append(item)
+
+    def add_connect_menu(self):
+        separator = Gtk.SeparatorMenuItem()
+        self.menu.append(separator)
+
+        heading = Gtk.MenuItem(label="Подключить диск")
+        heading.set_sensitive(False)
+        self.menu.append(heading)
+
+        connected_disks = set(self.service.get_connected_disks())
+        available = [
+            disk_id
+            for disk_id in ("yandex", "nextcloud")
+            if disk_id not in connected_disks
+        ]
+
+        if not available:
+            item = Gtk.MenuItem(label="Все диски уже подключены")
+            item.set_sensitive(False)
+            self.menu.append(item)
+            return
+
+        for disk_id in available:
+            item = Gtk.MenuItem(label=f"Подключить {DISK_TITLES[disk_id]}")
+            item.connect("activate", lambda w, d=disk_id: self.connect_disk(d))
+            self.menu.append(item)
+
+    def rebuild_menu(self):
+        # Создать новое меню
+        self.menu = Gtk.Menu()
+
+        self.add_disconnect_menu()
+        self.add_connect_menu()
+
+        separator = Gtk.SeparatorMenuItem()
+        self.menu.append(separator)
+
+        open_item = Gtk.MenuItem(label="Открыть Redisk")
+        open_item.connect("activate", lambda w: self.open_redisk())
+        self.menu.append(open_item)
+
+        self.menu.append(self.notifications_item)
+
+        separator2 = Gtk.SeparatorMenuItem()
+        self.menu.append(separator2)
+
+        quit_item = Gtk.MenuItem(label="Закрыть")
+        quit_item.connect("activate", lambda w: self.quit_app())
+        self.menu.append(quit_item)
+
+        self.menu.show_all()
+        self.indicator.set_menu(self.menu)
+
+    def _quit_impl(self):
+        Gtk.main_quit()
 
 
 def create_icon_path():
@@ -212,14 +340,21 @@ def create_icon_path():
 
 
 def run_tray(service: RediskService):
-    app = QApplication(sys.argv)
-    icon_path = create_icon_path()
-    tray_icon = QSystemTrayIcon(QIcon(icon_path), parent=app)
-    controller = TrayController(app=app, tray_icon=tray_icon, service=service)
-    controller.rebuild_menu()
+    if APPINDICATOR_AVAILABLE and sys.platform.startswith("linux"):
+        # Используем AppIndicator для GNOME/Ubuntu
+        controller = AppIndicatorTrayController(service)
+        controller.rebuild_menu()
+        controller.show_notification("DiscoHack", "Программа запущена")
+        Gtk.main()
+    else:
+        # Fallback to QSystemTrayIcon
+        app = QApplication(sys.argv)
+        icon_path = create_icon_path()
+        tray_icon = QSystemTrayIcon(QIcon(icon_path), parent=app)
+        controller = QTrayController(app, tray_icon, service)
+        controller.rebuild_menu()
 
-    tray_icon.setContextMenu(controller.menu)
-    tray_icon.show()
-    controller.show_notification("DiscoHack", "Программа запущена")
+        tray_icon.show()
+        controller.show_notification("DiscoHack", "Программа запущена")
 
-    sys.exit(app.exec())
+        sys.exit(app.exec())
