@@ -135,6 +135,10 @@ class TrayController:
             self.notifications_action.setText("Включить уведомления")
 
     def add_disconnect_menu(self):
+        heading = QAction("Отключить диск")
+        heading.setEnabled(False)
+        self.menu.addAction(heading)
+
         connected_disks = self.service.get_connected_disks()
         if not connected_disks:
             action = QAction("Нет подключенных дисков")
@@ -148,6 +152,13 @@ class TrayController:
             self.menu.addAction(action)
 
     def add_connect_menu(self):
+        if self.menu.actions():
+            self.menu.addSeparator()
+
+        heading = QAction("Подключить диск")
+        heading.setEnabled(False)
+        self.menu.addAction(heading)
+
         connected_disks = set(self.service.get_connected_disks())
         available = [
             disk_id
